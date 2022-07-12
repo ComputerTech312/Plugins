@@ -34,9 +34,9 @@ CMD_FUNC(saquit)
 	Client *target; 
 	char p[150] = "\0";
 	char reason[300] = "Quit: ";
-	int i; // iter8or
+	int i;
  
-    	/* ur penis I mean text is too sm0l */
+    	
 	if (!parv[1] || BadPtr(parv[1]))
 	{
 		sendnumeric(client, ERR_NEEDMOREPARAMS, SAQUITLOL);
