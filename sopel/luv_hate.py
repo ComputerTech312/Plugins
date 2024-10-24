@@ -52,6 +52,7 @@ def save_data():
 # Cooldown function
 def can_use_command(nick):
     current_time = time.time()
+    nick = nick.lower()  # Ensure nick is handled in lowercase
     if nick in last_command_time:
         last_time = last_command_time[nick]
         if current_time - last_time < COOLDOWN:
@@ -93,12 +94,14 @@ def luv_user(bot, trigger):
     if not is_plugin_enabled(channel):
         return  # Ignore if plugin is disabled in this channel
 
-    giver = trigger.nick
+    giver = trigger.nick.lower()  # Normalize giver nickname to lowercase
     receiver = trigger.group(2)
 
     if not receiver:
         bot.say("💖 You need to specify a user to give luv to. Usage: !luv <username>")
         return
+
+    receiver = receiver.lower()  # Normalize receiver nickname to lowercase
 
     can_luv, remaining = can_use_command(giver)
     if not can_luv:
@@ -130,12 +133,14 @@ def hate_user(bot, trigger):
     if not is_plugin_enabled(channel):
         return  # Ignore if plugin is disabled in this channel
 
-    giver = trigger.nick
+    giver = trigger.nick.lower()  # Normalize giver nickname to lowercase
     receiver = trigger.group(2)
 
     if not receiver:
         bot.say("💔 You need to specify a user to give hate to. Usage: !hate <username>")
         return
+
+    receiver = receiver.lower()  # Normalize receiver nickname to lowercase
 
     can_hate, remaining = can_use_command(giver)
     if not can_hate:
