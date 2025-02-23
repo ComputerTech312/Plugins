@@ -20,6 +20,22 @@ COOLDOWN = 1800  # Default cooldown is 30 minutes (in seconds)
 DECAY_TIME = 2592000  # 30 days in seconds for point decay
 DAILY_CAP = 10  # Maximum number of points a user can give in a day
 
+# Optionally, admins can be exempt from cooldown.
+ADMIN_THROTTLE_EXEMPT = True
+
+def sanitize_input(text):
+    """
+    Sanitizes input by removing non-ASCII characters and extra whitespace.
+    This will ignore any Unicode characters.
+    """
+    try:
+        # Remove any non-ASCII characters.
+        sanitized = text.encode('ascii', 'ignore').decode('ascii')
+    except Exception:
+        sanitized = text
+    # Collapse multiple whitespace characters and strip leading/trailing spaces.
+    return " ".join(sanitized.strip().split())
+
 # Load data from file on startup
 def load_data():
     global luv_points, hate_points, luv_given_count, hate_given_count, enabled_channels
@@ -101,21 +117,35 @@ def luv_user(bot, trigger):
         bot.say("💖 You need to specify a user to give luv to. Usage: !luv <username>")
         return
 
-    receiver = receiver.lower()  # Normalize receiver nickname to lowercase
+    # Sanitize input: remove non-ASCII characters and extra whitespace.
+    receiver = sanitize_input(receiver).lower()
 
-    can_luv, remaining = can_use_command(giver)
-    if not can_luv:
-        minutes = int(remaining // 60)
-        seconds = int(remaining % 60)
-        bot.notice(f"⏳ {giver}, you need to wait {minutes} minutes and {seconds} seconds before you can give luv again!", giver)
+    # Check if the target is on the channel
+    if channel in bot.channels:
+        channel_users = {user.lower() for user in bot.channels[channel].users}
+        if receiver not in channel_users:
+            bot.say(f"❌ User {receiver} is not on the channel.")
+            return
+    else:
+        bot.say("❌ Channel data is not available.")
         return
+
+    # Check cooldown unless the user is an admin and admin exemption is enabled
+    if not (ADMIN_THROTTLE_EXEMPT and trigger.admin):
+        can_luv, remaining = can_use_command(giver)
+        if not can_luv:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            bot.notice(f"⏳ {giver}, you need to wait {minutes} minutes and {seconds} seconds before you can give luv again!", giver)
+            return
+        last_command_time[giver] = time.time()
+    # Else: Admins with exemption bypass the cooldown check
 
     # Track how many times the giver has given luv
     luv_given_count[giver] = luv_given_count.get(giver, 0) + 1
 
     # Update luv points for the receiver
     luv_points[receiver] = luv_points.get(receiver, 0) + 1
-    last_command_time[giver] = time.time()
     save_data()
 
     # Random response for giving luv
@@ -140,21 +170,35 @@ def hate_user(bot, trigger):
         bot.say("💔 You need to specify a user to give hate to. Usage: !hate <username>")
         return
 
-    receiver = receiver.lower()  # Normalize receiver nickname to lowercase
+    # Sanitize input: remove non-ASCII characters and extra whitespace.
+    receiver = sanitize_input(receiver).lower()
 
-    can_hate, remaining = can_use_command(giver)
-    if not can_hate:
-        minutes = int(remaining // 60)
-        seconds = int(remaining % 60)
-        bot.notice(f"⏳ {giver}, you need to wait {minutes} minutes and {seconds} seconds before you can give hate again!", giver)
+    # Check if the target is on the channel
+    if channel in bot.channels:
+        channel_users = {user.lower() for user in bot.channels[channel].users}
+        if receiver not in channel_users:
+            bot.say(f"❌ User {receiver} is not on the channel.")
+            return
+    else:
+        bot.say("❌ Channel data is not available.")
         return
+
+    # Check cooldown unless the user is an admin and admin exemption is enabled
+    if not (ADMIN_THROTTLE_EXEMPT and trigger.admin):
+        can_hate, remaining = can_use_command(giver)
+        if not can_hate:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            bot.notice(f"⏳ {giver}, you need to wait {minutes} minutes and {seconds} seconds before you can give hate again!", giver)
+            return
+        last_command_time[giver] = time.time()
+    # Else: Admins with exemption bypass the cooldown check
 
     # Track how many times the giver has given hate
     hate_given_count[giver] = hate_given_count.get(giver, 0) + 1
 
     # Update hate points for the receiver
     hate_points[receiver] = hate_points.get(receiver, 0) + 1
-    last_command_time[giver] = time.time()
     save_data()
 
     # Random response for giving hate
@@ -164,48 +208,6 @@ def hate_user(bot, trigger):
         f"😡 {giver} expresses their displeasure with {receiver}. 💢 {receiver} now has {hate_points[receiver]} 💢 points!"
     ])
     bot.say(response)
-
-# Command to show top luv leaderboard
-@sopel.plugin.command('topluv')
-def topluv(bot, trigger):
-    channel = trigger.sender
-    if not is_plugin_enabled(channel):
-        return  # Ignore if plugin is disabled in this channel
-
-    count = trigger.group(2)
-    if not count or not count.isdigit():
-        count = 5
-    else:
-        count = int(count)
-
-    if not luv_points:
-        bot.say("No one has received any 💖 yet!")
-        return
-
-    sorted_luv = sorted(luv_points.items(), key=lambda x: x[1], reverse=True)[:count]
-    luv_list = " | ".join([f"💖 {user}: {points} points" for user, points in sorted_luv])
-    bot.say(f"✨ Top {count} users with the most 💖: {luv_list}")
-
-# Command to show top hate leaderboard
-@sopel.plugin.command('tophate')
-def tophate(bot, trigger):
-    channel = trigger.sender
-    if not is_plugin_enabled(channel):
-        return  # Ignore if plugin is disabled in this channel
-
-    count = trigger.group(2)
-    if not count or not count.isdigit():
-        count = 5
-    else:
-        count = int(count)
-
-    if not hate_points:
-        bot.say("No one has received any 💢 yet!")
-        return
-
-    sorted_hate = sorted(hate_points.items(), key=lambda x: x[1], reverse=True)[:count]
-    hate_list = " | ".join([f"💢 {user}: {points} points" for user, points in sorted_hate])
-    bot.say(f"🔥 Top {count} users with the most 💢: {hate_list}")
 
 # Load data on startup
 load_data()
