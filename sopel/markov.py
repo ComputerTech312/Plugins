@@ -1,9 +1,10 @@
+import os
 import random
 import re
+import sqlite3
 import threading
 
 import requests
-from sqlalchemy import text
 from sopel import plugin
 
 URL_REGEX = re.compile(r"https?://\S+")
@@ -12,14 +13,15 @@ NO_MARKOV = "Markov chains are not enabled in this channel."
 
 _load_thread = None
 _load_lock = threading.Lock()
-_engine = None
+_db_path = None
 
 
 def setup(bot):
-    global _engine
-    _engine = bot.db.engine
-    with _engine.begin() as conn:
-        conn.execute(text(
+    global _db_path
+    _db_path = os.path.join(bot.settings.homedir, "markov.db")
+    conn = sqlite3.connect(_db_path)
+    try:
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS markov (
                 channel     TEXT    NOT NULL,
@@ -30,7 +32,10 @@ def setup(bot):
                 PRIMARY KEY (channel, first_word, second_word, third_word)
             )
             """
-        ))
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @plugin.rule(r".+")
@@ -142,11 +147,15 @@ def cmd_clearmarkov(bot, trigger):
     if channel == "#premium":
         return bot.reply("The Markov chain for this channel cannot be cleared.")
 
-    with _engine.begin() as conn:
+    conn = sqlite3.connect(_db_path)
+    try:
         conn.execute(
-            text("DELETE FROM markov WHERE channel = :channel"),
+            "DELETE FROM markov WHERE channel = :channel",
             {"channel": channel},
         )
+        conn.commit()
+    finally:
+        conn.close()
 
     bot.reply("Cleared the Markov chain for %s." % channel)
 
@@ -210,27 +219,29 @@ def _create(bot, channel, line):
         inserts.append(tuple(words[i : i + 3]))
     inserts.append((words[-2], words[-1], None))
 
-    with _engine.begin() as conn:
+    conn = sqlite3.connect(_db_path)
+    try:
         for first, second, third in inserts:
             conn.execute(
-                text(
-                    """
-                    INSERT OR REPLACE INTO markov
-                        (channel, first_word, second_word, third_word, frequency)
-                    VALUES (
-                        :channel, :first, :second, :third,
-                        COALESCE((
-                            SELECT frequency FROM markov
-                             WHERE channel     IS :channel
-                               AND first_word  IS :first
-                               AND second_word IS :second
-                               AND third_word  IS :third
-                        ), 0) + 1
-                    )
-                    """
-                ),
+                """
+                INSERT OR REPLACE INTO markov
+                    (channel, first_word, second_word, third_word, frequency)
+                VALUES (
+                    :channel, :first, :second, :third,
+                    COALESCE((
+                        SELECT frequency FROM markov
+                         WHERE channel     IS :channel
+                           AND first_word  IS :first
+                           AND second_word IS :second
+                           AND third_word  IS :third
+                    ), 0) + 1
+                )
+                """,
                 {"channel": channel, "first": first, "second": second, "third": third},
             )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _choose(pairs):
@@ -240,18 +251,17 @@ def _choose(pairs):
 
 def _generate(channel, first_words):
     first_words = [w.lower() for w in first_words]
-    with _engine.connect() as conn:
+    conn = sqlite3.connect(_db_path)
+    try:
         if not first_words:
             rows = conn.execute(
-                text(
-                    """
-                    SELECT third_word, frequency FROM markov
-                     WHERE channel     = :channel
-                       AND first_word  IS NULL
-                       AND second_word IS NULL
-                       AND third_word  IS NOT NULL
-                    """
-                ),
+                """
+                SELECT third_word, frequency FROM markov
+                 WHERE channel     = :channel
+                   AND first_word  IS NULL
+                   AND second_word IS NULL
+                   AND third_word  IS NOT NULL
+                """,
                 {"channel": channel},
             ).fetchall()
             if not rows:
@@ -259,15 +269,13 @@ def _generate(channel, first_words):
             first_word = _choose(rows)
 
             rows = conn.execute(
-                text(
-                    """
-                    SELECT third_word, frequency FROM markov
-                     WHERE channel     = :channel
-                       AND first_word  IS NULL
-                       AND second_word = :second
-                       AND third_word  IS NOT NULL
-                    """
-                ),
+                """
+                SELECT third_word, frequency FROM markov
+                 WHERE channel     = :channel
+                   AND first_word  IS NULL
+                   AND second_word = :second
+                   AND third_word  IS NOT NULL
+                """,
                 {"channel": channel, "second": first_word},
             ).fetchall()
             if not rows:
@@ -277,17 +285,15 @@ def _generate(channel, first_words):
             words = [first_word, second_word]
 
         elif len(first_words) == 1:
-            first_word = first_words[0].lower()
+            first_word = first_words[0]
             rows = conn.execute(
-                text(
-                    """
-                    SELECT second_word, third_word, frequency FROM markov
-                     WHERE channel     = :channel
-                       AND first_word  = :first
-                       AND second_word IS NOT NULL
-                       AND third_word  IS NOT NULL
-                    """
-                ),
+                """
+                SELECT second_word, third_word, frequency FROM markov
+                 WHERE channel     = :channel
+                   AND first_word  = :first
+                   AND second_word IS NOT NULL
+                   AND third_word  IS NOT NULL
+                """,
                 {"channel": channel, "first": first_word},
             ).fetchall()
             if not rows:
@@ -303,14 +309,12 @@ def _generate(channel, first_words):
 
         for _ in range(30):
             rows = conn.execute(
-                text(
-                    """
-                    SELECT third_word, frequency FROM markov
-                     WHERE channel     = :channel
-                       AND first_word  = :first
-                       AND second_word = :second
-                    """
-                ),
+                """
+                SELECT third_word, frequency FROM markov
+                 WHERE channel     = :channel
+                   AND first_word  = :first
+                   AND second_word = :second
+                """,
                 {"channel": channel, "first": words[-2], "second": words[-1]},
             ).fetchall()
             if not rows:
@@ -321,6 +325,8 @@ def _generate(channel, first_words):
                 break
 
             words.append(next_word)
+    finally:
+        conn.close()
 
     if words == first_words:
         return None
