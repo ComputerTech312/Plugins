@@ -11,6 +11,11 @@ URL_REGEX = re.compile(r"https?://\S+")
 
 NO_MARKOV = "Markov chains are not enabled in this channel."
 
+IGNORED_NICKS = {
+    "NickServ",
+    "ChanServ",
+}
+
 _load_thread = None
 _load_lock = threading.Lock()
 _db_path = None
@@ -33,6 +38,15 @@ def setup(bot):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS markov_ignore (
+                channel TEXT NOT NULL,
+                nick    TEXT NOT NULL,
+                PRIMARY KEY (channel, nick)
+            )
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -44,6 +58,11 @@ def on_channel_message(bot, trigger):
         return
 
     channel = str(trigger.sender)
+    nick = str(trigger.nick)
+
+    if _is_ignored(channel, nick):
+        return
+
     markov_chance = int(bot.db.get_channel_value(channel, "markov-chance") or 0)
 
     if markov_chance > 0 and random.randint(0, 99) < markov_chance:
@@ -120,6 +139,50 @@ def cmd_markovoff(bot, trigger):
     channel = str(trigger.sender)
     bot.db.set_channel_value(channel, "markov", False)
     bot.reply("Markov chains disabled for %s." % channel)
+
+
+@plugin.command("markovignore")
+@plugin.require_chanmsg("This command only works in channels.")
+@plugin.require_privilege(plugin.OP, "You must be a channel operator to use this command.")
+def cmd_markovignore(bot, trigger):
+    nick = trigger.group(2)
+    if not nick:
+        return bot.reply("Usage: !markovignore <nick>")
+
+    channel = str(trigger.sender)
+    conn = sqlite3.connect(_db_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO markov_ignore (channel, nick) VALUES (:channel, :nick)",
+            {"channel": channel, "nick": nick.lower()},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    bot.reply("%s will no longer be logged or auto-replied to by markov." % nick)
+
+
+@plugin.command("markovunignore")
+@plugin.require_chanmsg("This command only works in channels.")
+@plugin.require_privilege(plugin.OP, "You must be a channel operator to use this command.")
+def cmd_markovunignore(bot, trigger):
+    nick = trigger.group(2)
+    if not nick:
+        return bot.reply("Usage: !markovunignore <nick>")
+
+    channel = str(trigger.sender)
+    conn = sqlite3.connect(_db_path)
+    try:
+        conn.execute(
+            "DELETE FROM markov_ignore WHERE channel = :channel AND nick = :nick",
+            {"channel": channel, "nick": nick.lower()},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    bot.reply("%s removed from markov ignore list." % nick)
 
 
 @plugin.command("markovchance")
@@ -242,6 +305,20 @@ def _create(bot, channel, line):
         conn.commit()
     finally:
         conn.close()
+
+
+def _is_ignored(channel, nick):
+    if nick.lower() in {n.lower() for n in IGNORED_NICKS}:
+        return True
+    conn = sqlite3.connect(_db_path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM markov_ignore WHERE channel = :channel AND nick = :nick",
+            {"channel": channel, "nick": nick.lower()},
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
 
 
 def _choose(pairs):
